@@ -207,11 +207,29 @@ function portionTier(target){
   return {arroz:"5–7 colheres de sopa", carbo:"porção generosa de carboidrato"};
 }
 const FAST_WINDOWS = {
-  sem:{label:"Sem jejum", start:7.5, end:21.5},
-  "12:12":{label:"12:12", start:8, end:20},
-  "14:10":{label:"14:10", start:10, end:20},
-  "16:8":{label:"16:8", start:12, end:20}
+  sem:{label:"Sem jejum", dur:14, baseStart:7.5},
+  "12:12":{label:"12:12", dur:12, baseStart:8},
+  "14:10":{label:"14:10", dur:10, baseStart:10},
+  "16:8":{label:"16:8", dur:8, baseStart:12}
 };
+const WAKE_BY_SHIFT = {manha:5.5, tarde:10};
+const WORKOUT_TIP = {
+  manha:"Você acorda cedo pro turno da manhã — treine depois do trabalho, por volta das 15h–17h.",
+  tarde:"Você entra à tarde — aproveite a manhã livre pra treinar, por volta das 8h–10h, antes do trabalho."
+};
+function activeShift(p){
+  if(p.turnoModo==='alternado') return localStorage.getItem('dieta_turno_atual')||'manha';
+  return p.turnoModo==='fixo_tarde' ? 'tarde' : 'manha';
+}
+function computeFastWindow(p){
+  const cfg = FAST_WINDOWS[p.jejum];
+  let start = cfg.baseStart;
+  if(p.turnoModo && p.turnoModo!=='nenhum'){
+    start = WAKE_BY_SHIFT[activeShift(p)] + 1;
+  }
+  const end = Math.min(start + cfg.dur, 23.75);
+  return {start, end, label:cfg.label};
+}
 function hourToStr(h){ const hh=Math.floor(h); const mm=Math.round((h-hh)*60); return `${hh.toString().padStart(2,'0')}:${mm.toString().padStart(2,'0')}`; }
 function mealSchedule(fw){
   const dur = fw.end-fw.start;
@@ -425,6 +443,15 @@ function renderForm(){
       <label class="field">Jejum intermitente</label>
       <div class="segrow" id="segFast"><div class="seg" data-v="sem">Sem jejum</div><div class="seg" data-v="12:12">12:12</div><div class="seg" data-v="14:10">14:10</div><div class="seg" data-v="16:8">16:8</div></div>
 
+      <label class="field">Turno de trabalho</label>
+      <div class="segrow" id="segTurno">
+        <div class="seg" data-v="nenhum">Horário comum</div>
+        <div class="seg" data-v="fixo_manha">Manhã (06h–14h)</div>
+        <div class="seg" data-v="fixo_tarde">Tarde/noite (15h–23h)</div>
+        <div class="seg" data-v="alternado">Alternado por semana</div>
+      </div>
+      <p class="note" id="turnoNote"></p>
+
       <label class="field">Restrição alimentar</label>
       <div class="segrow" id="segRestr"><div class="seg" data-v="sem">Sem restrição</div><div class="seg" data-v="vegetariano">Vegetariana</div><div class="seg" data-v="vegano">Vegana</div><div class="seg" data-v="semlactose">Sem lactose</div></div>
 
@@ -452,6 +479,19 @@ function renderForm(){
   }
   seg('segSexo', p.sexo||'homem'); seg('segAtiv', p.atividade||'moderado'); seg('segObj', p.objetivo||'perder');
   seg('segFast', p.jejum||'16:8'); seg('segRestr', p.restricao||'sem'); seg('segLocal', p.treinoLocal||'casa'); seg('segNivel', p.treinoNivel||'intermediario');
+  seg('segTurno', p.turnoModo||'nenhum');
+  function updateTurnoNote(){
+    const v = document.querySelector('#segTurno .seg.active').dataset.v;
+    const notes = {
+      nenhum:'',
+      fixo_manha:'As refeições vão se ajustar ao seu horário de acordar cedo (turno 06h–14h).',
+      fixo_tarde:'As refeições vão se ajustar ao seu horário de acordar mais tarde (turno 15h–23h).',
+      alternado:'Depois de salvar, você poderá trocar entre "semana da manhã" e "semana da tarde" direto na aba Hoje.'
+    };
+    document.getElementById('turnoNote').textContent = notes[v];
+  }
+  document.querySelectorAll('#segTurno .seg').forEach(s=> s.addEventListener('click', updateTurnoNote));
+  updateTurnoNote();
 
   document.getElementById('gerarBtn').addEventListener('click', ()=>{
     const peso=parseFloat(document.getElementById('fPeso').value), altura=parseFloat(document.getElementById('fAltura').value), idade=parseInt(document.getElementById('fIdade').value);
@@ -466,7 +506,8 @@ function renderForm(){
       jejum: document.querySelector('#segFast .seg.active').dataset.v,
       restricao: document.querySelector('#segRestr .seg.active').dataset.v,
       treinoLocal: document.querySelector('#segLocal .seg.active').dataset.v,
-      treinoNivel: document.querySelector('#segNivel .seg.active').dataset.v
+      treinoNivel: document.querySelector('#segNivel .seg.active').dataset.v,
+      turnoModo: document.querySelector('#segTurno .seg.active').dataset.v
     });
     maybeAutoBackup();
     goPage('home');
@@ -482,7 +523,7 @@ function ctx(){
   const p = getProfile();
   const plan = calcPlan(p);
   const tier = portionTier(plan.target);
-  const fw = FAST_WINDOWS[p.jejum];
+  const fw = computeFastWindow(p);
   const sched = mealSchedule(fw);
   const treino = buildTreino(p);
   return {p, plan, tier, fw, sched, treino};
@@ -499,7 +540,17 @@ function renderHome(){
   const meals = dayMeals(todayIdx(), sched, tier, p.restricao);
   const today = treino[todayIdx()];
 
+  const shift = activeShift(p);
+  const shiftToggle = p.turnoModo==='alternado' ? `
+    <div class="card"><h2><span class="em">🔁</span>Turno desta semana</h2>
+      <div class="segrow" id="segTurnoSemana">
+        <div class="seg ${shift==='manha'?'active':''}" data-v="manha">Manhã (06h–14h)</div>
+        <div class="seg ${shift==='tarde'?'active':''}" data-v="tarde">Tarde/noite (15h–23h)</div>
+      </div>
+    </div>` : '';
+
   document.getElementById('content').innerHTML = `
+    ${shiftToggle}
     <div class="card">
       <div class="hero">
         <div class="n">${plan.target}</div>
@@ -526,6 +577,7 @@ function renderHome(){
 
     <div class="card"><h2><span class="em">🏋️</span>Treino de hoje — ${today.t}</h2>
       <p class="foods">${today.d}</p>
+      ${p.turnoModo && p.turnoModo!=='nenhum' ? `<p class="note">${WORKOUT_TIP[shift]}</p>` : ''}
       ${itemRow('tre_'+todayIdx(),0,'Concluí o treino de hoje')}
     </div>
 
@@ -534,6 +586,14 @@ function renderHome(){
     </div>
   `;
   bindChecks(document.getElementById('content'));
+  const segTS = document.getElementById('segTurnoSemana');
+  if(segTS){
+    segTS.querySelectorAll('.seg').forEach(s=> s.addEventListener('click', ()=>{
+      localStorage.setItem('dieta_turno_atual', s.dataset.v);
+      maybeAutoBackup();
+      renderHome();
+    }));
+  }
   document.querySelectorAll('.water-dot').forEach(d=>{
     d.addEventListener('click', ()=>{
       const val=+d.dataset.i; const cur=parseInt(localStorage.getItem(wKey)||'0');
