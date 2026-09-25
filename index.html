@@ -112,6 +112,16 @@
   .chip{ padding:9px 12px; border-radius:12px; border:1.5px solid var(--line); background:var(--panel-2); cursor:pointer; font-size:12.5px; font-weight:600; color:var(--ink); touch-action:manipulation; }
   .chip.active{ border-color:var(--accent); background:color-mix(in srgb, var(--accent) 14%, var(--panel-2)); color:var(--accent); }
   .chipgrid{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .tlwrap{ position:relative; height:10px; margin:42px 15px 34px; touch-action:none; }
+  .tl-bg{ position:absolute; inset:0; background:var(--line); border-radius:6px; }
+  .tl-range{ position:absolute; top:0; bottom:0; background:var(--accent); border-radius:6px; opacity:.92; }
+  .tl-handle{ position:absolute; top:50%; width:28px; height:28px; margin-top:-14px; margin-left:-14px; border-radius:50%; background:var(--panel); border:3px solid var(--accent); box-shadow:0 2px 6px rgba(0,0,0,.25); cursor:grab; z-index:3; }
+  .tl-handle:active{ cursor:grabbing; }
+  .tl-mealdot{ position:absolute; top:50%; width:12px; height:12px; margin-top:-6px; margin-left:-6px; border-radius:50%; background:var(--accent-2); border:2px solid var(--panel); pointer-events:none; z-index:2; }
+  .tl-mealtime{ position:absolute; bottom:18px; left:50%; transform:translateX(-50%); font-size:11px; font-weight:800; white-space:nowrap; color:var(--ink); }
+  .tl-mealname{ position:absolute; top:18px; left:50%; transform:translateX(-50%); font-size:9px; font-weight:700; color:var(--muted); white-space:nowrap; }
+  .tl-endlbl{ position:absolute; top:-26px; font-size:12px; font-weight:800; color:var(--accent); transform:translateX(-50%); white-space:nowrap; }
+  .tl-fastlbl{ position:absolute; top:16px; font-size:10.5px; font-weight:700; color:var(--muted); transform:translateX(-50%); white-space:nowrap; }
   @media (max-width:400px){
     header{ padding:14px 14px 10px; padding-top:calc(14px + env(safe-area-inset-top,0px)); }
     main{ padding:14px 14px 108px; }
@@ -595,7 +605,15 @@ function renderHome(){
       <div class="stat"><span>Jejum</span><b>${fastHours}h</b></div>
     </div>
 
-    <div class="card"><h2><span class="em">${icon('clock')}</span>Horários</h2>${buildTimelineSVG(sched, fw)}
+    <div class="card"><h2><span class="em">${icon('clock')}</span>Horários</h2>
+      <p class="note" style="margin-top:0">Arraste as bolinhas roxas nas pontas pra ajustar seu horário de comer.</p>
+      <div class="tlwrap" id="tlwrap">
+        <div class="tl-bg"></div>
+        <div class="tl-range" id="tlRange"></div>
+        ${sched.map((m,i)=>`<div class="tl-mealdot" id="tlDot${i}"><div class="tl-mealtime" id="tlDotTime${i}">${m.str}</div><div class="tl-mealname">${m.label}</div></div>`).join('')}
+        <div class="tl-handle" id="tlHandleStart" role="slider" aria-label="Início da janela alimentar"><span class="tl-endlbl" id="tlStartLabel">${hourToStr(fw.start)}</span></div>
+        <div class="tl-handle" id="tlHandleEnd" role="slider" aria-label="Fim da janela alimentar"><span class="tl-endlbl" id="tlEndLabel">${hourToStr(fw.end)}</span><span class="tl-fastlbl" id="tlFastLabel">jejum ${fastHours}h</span></div>
+      </div>
       <div class="legend"><span><i style="background:var(--accent-2)"></i>Refeição</span><span><i style="background:var(--accent)"></i>Pode comer</span><span><i style="background:var(--line)"></i>Jejum</span></div>
     </div>
 
@@ -616,6 +634,7 @@ function renderHome(){
     </div>
   `;
   bindChecks(document.getElementById('content'));
+  attachTimelineDrag(fw, p.restricao, tier);
   const segTS = document.getElementById('segTurnoSemana');
   if(segTS){
     segTS.querySelectorAll('.seg').forEach(s=> s.addEventListener('click', ()=>{ localStorage.setItem('dieta_turno_atual', s.dataset.v); maybeAutoBackup(); renderHome(); }));
@@ -628,6 +647,55 @@ function renderHome(){
       renderHome();
     });
   });
+}
+
+function attachTimelineDrag(fw, restricao, tier){
+  const wrap = document.getElementById('tlwrap');
+  if(!wrap) return;
+  let curStart = fw.start, curEnd = fw.end, dragging = null;
+
+  function paint(){
+    const s = curStart/24*100, e = curEnd/24*100;
+    document.getElementById('tlRange').style.left = s+'%';
+    document.getElementById('tlRange').style.width = (e-s)+'%';
+    document.getElementById('tlHandleStart').style.left = s+'%';
+    document.getElementById('tlHandleEnd').style.left = e+'%';
+    document.getElementById('tlStartLabel').textContent = hourToStr(curStart);
+    document.getElementById('tlEndLabel').textContent = hourToStr(curEnd);
+    document.getElementById('tlFastLabel').textContent = `jejum ${(24-(curEnd-curStart)).toFixed(1).replace('.0','')}h`;
+    const sched2 = mealSchedule({start:curStart, end:curEnd});
+    sched2.forEach((m,i)=>{
+      const dot = document.getElementById('tlDot'+i); if(!dot) return;
+      dot.style.left = (m.hour/24*100)+'%';
+      document.getElementById('tlDotTime'+i).textContent = m.str;
+    });
+  }
+  paint();
+
+  function hourFromClientX(clientX){
+    const r = wrap.getBoundingClientRect();
+    let hour = (clientX-r.left)/r.width*24;
+    return Math.max(0, Math.min(23.75, Math.round(hour*4)/4));
+  }
+  function commit(){
+    localStorage.setItem('dieta_janela_manual', JSON.stringify({start:curStart, end:curEnd}));
+    maybeAutoBackup();
+    renderHome();
+  }
+  function bindHandle(el, which){
+    el.addEventListener('pointerdown', (e)=>{ dragging=which; el.setPointerCapture(e.pointerId); e.preventDefault(); });
+    el.addEventListener('pointermove', (e)=>{
+      if(dragging!==which) return;
+      const hour = hourFromClientX(e.clientX);
+      if(which==='start') curStart = Math.min(hour, curEnd-2);
+      else curEnd = Math.max(hour, curStart+2);
+      paint();
+    });
+    el.addEventListener('pointerup', ()=>{ if(dragging===which){ dragging=null; commit(); } });
+    el.addEventListener('pointercancel', ()=>{ dragging=null; });
+  }
+  bindHandle(document.getElementById('tlHandleStart'), 'start');
+  bindHandle(document.getElementById('tlHandleEnd'), 'end');
 }
 
 function renderCardapio(){
